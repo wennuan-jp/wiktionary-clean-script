@@ -20,10 +20,13 @@ IGNORE_PREFIXES = (
 
 LANG_HEADER_RE = re.compile(r"^==\{\{L\|([a-z-]+)\}\}==\s*$")
 GENERIC_H2_RE = re.compile(r"^==([^=]+)==\s*$")
+TRANS_HEADER_RE = re.compile(r"^====\s*\{\{trans\}\}\s*====\s*$")
+SECTION_HEADER_RE = re.compile(r"^(={2,4})[^=].*[^=]\1\s*$|^(={2,4})[^=]\2\s*$")
 FILE_TAG_RE = re.compile(r"\[\[(?:File|Image):.+?\]\]", re.IGNORECASE | re.DOTALL)
 INVALID_XML_CHAR_RE = re.compile(
     "[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]"
 )
+JAPANESE_TITLE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 
 
 def local_name(tag):
@@ -32,8 +35,10 @@ def local_name(tag):
 
 def should_skip_title(title):
     title_lower = title.strip().lower()
-    return ":" in title_lower or any(
-        title_lower.startswith(prefix) for prefix in IGNORE_PREFIXES
+    return (
+        ":" in title_lower
+        or any(title_lower.startswith(prefix) for prefix in IGNORE_PREFIXES)
+        or not JAPANESE_TITLE_RE.search(title)
     )
 
 
@@ -57,11 +62,33 @@ def strip_non_japanese_language_blocks(text):
     return "\n".join(cleaned_lines)
 
 
+def strip_translation_blocks(text):
+    if not text:
+        return ""
+
+    cleaned_lines = []
+    skipping_translation = False
+
+    for line in text.splitlines():
+        if TRANS_HEADER_RE.match(line):
+            skipping_translation = True
+            continue
+
+        if skipping_translation and SECTION_HEADER_RE.match(line):
+            skipping_translation = False
+
+        if not skipping_translation:
+            cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
+
+
 def clean_page_text_completely(text):
     if not text:
         return ""
 
     text = strip_non_japanese_language_blocks(text)
+    text = strip_translation_blocks(text)
     text = FILE_TAG_RE.sub("", text)
     text = INVALID_XML_CHAR_RE.sub("", text)
     return text.strip()
