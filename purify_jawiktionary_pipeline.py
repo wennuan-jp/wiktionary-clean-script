@@ -20,7 +20,7 @@ IGNORE_PREFIXES = (
 
 LANG_HEADER_RE = re.compile(r"^==\{\{L\|([a-z-]+)\}\}==\s*$")
 GENERIC_H2_RE = re.compile(r"^==([^=]+)==\s*$")
-TRANS_HEADER_RE = re.compile(r"^====\s*\{\{trans\}\}\s*====\s*$")
+TRANS_HEADER_RE = re.compile(r"^={3,4}\s*\{\{trans\}\}\s*={3,4}\s*$")
 SECTION_HEADER_RE = re.compile(r"^(={2,4})[^=].*[^=]\1\s*$|^(={2,4})[^=]\2\s*$")
 REFERENCE_HEADER_RE = re.compile(r"^===\s*参考文献\s*===\s*$")
 MAJOR_SECTION_HEADER_RE = re.compile(r"^(={2,3})[^=].*[^=]\1\s*$|^(={2,3})[^=]\2\s*$")
