@@ -22,11 +22,30 @@ LANG_HEADER_RE = re.compile(r"^==\{\{L\|([a-z-]+)\}\}==\s*$")
 GENERIC_H2_RE = re.compile(r"^==([^=]+)==\s*$")
 TRANS_HEADER_RE = re.compile(r"^====\s*\{\{trans\}\}\s*====\s*$")
 SECTION_HEADER_RE = re.compile(r"^(={2,4})[^=].*[^=]\1\s*$|^(={2,4})[^=]\2\s*$")
+REFERENCE_HEADER_RE = re.compile(r"^===\s*参考文献\s*===\s*$")
+MAJOR_SECTION_HEADER_RE = re.compile(r"^(={2,3})[^=].*[^=]\1\s*$|^(={2,3})[^=]\2\s*$")
 FILE_TAG_RE = re.compile(r"\[\[(?:File|Image):.+?\]\]", re.IGNORECASE | re.DOTALL)
+FURIGANA_RE = re.compile(r"\{\{ふりがな\|([^|{}]+)\|([^|{}]+)\}\}")
+WIKILINK_WITH_LABEL_RE = re.compile(r"\[\[[^|\]]+\|([^\]]+)\]\]")
+WIKILINK_SIMPLE_RE = re.compile(r"\[\[([^\]]+)\]\]")
+LAYOUT_TEMPLATE_LINE_RE = re.compile(r"^\s*\{\{(?:top|bottom)(?:\|[^{}]*)?\}\}\s*$")
+JA_PRON_RE = re.compile(r"^\s*\{\{ja-pron\|([^|{}]+)(?:\|[^{}]*)?\}\}\s*$")
+JA_NOUN_RE = re.compile(r"^\s*\{\{ja-noun(?:\|([^{}]*))?\}\}\s*$")
+JA_KANJI_RE = re.compile(r"^\s*\{\{ja-kanji(?:\|[^{}]*)?\}\}\s*$")
+JA_POS_HEADING_RE = re.compile(r"^===\s*\{\{([^{}|]+)(?:\|[^{}]*)?\}\}\s*===\s*$")
 INVALID_XML_CHAR_RE = re.compile(
     "[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]"
 )
 JAPANESE_TITLE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
+
+POS_LABELS = {
+    "noun": "名詞",
+    "verb": "動詞",
+    "adj": "形容詞",
+    "adjective": "形容詞",
+    "adv": "副詞",
+    "adverb": "副詞",
+}
 
 
 def local_name(tag):
@@ -83,20 +102,127 @@ def strip_translation_blocks(text):
     return "\n".join(cleaned_lines)
 
 
-def clean_page_text_completely(text):
+def strip_reference_sections(text):
+    if not text:
+        return ""
+
+    cleaned_lines = []
+    skipping_reference = False
+
+    for line in text.splitlines():
+        if REFERENCE_HEADER_RE.match(line):
+            skipping_reference = True
+            continue
+
+        if skipping_reference and MAJOR_SECTION_HEADER_RE.match(line):
+            skipping_reference = False
+
+        if not skipping_reference:
+            cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
+
+
+def convert_furigana(text):
+    return FURIGANA_RE.sub(r"<ruby>\1<rt>\2</rt></ruby>", text)
+
+
+def strip_wikilinks(text):
+    text = WIKILINK_WITH_LABEL_RE.sub(r"\1", text)
+    return WIKILINK_SIMPLE_RE.sub(r"\1", text)
+
+
+def strip_layout_templates(text):
+    return "\n".join(
+        line for line in text.splitlines() if not LAYOUT_TEMPLATE_LINE_RE.match(line)
+    )
+
+
+def clean_reading(reading):
+    if not reading:
+        return ""
+
+    reading = strip_wikilinks(reading)
+    reading = re.sub(r"<[^>]+>", "", reading)
+    return reading.strip()
+
+
+def format_entry_header(title, label, reading=""):
+    if reading:
+        return f"## {title} ({reading}) [{label}]"
+    return f"## {title} [{label}]"
+
+
+def normalize_japanese_headers(text, title):
+    if not text:
+        return ""
+
+    cleaned_lines = []
+    pending_reading = ""
+    emitted_headers = set()
+
+    for line in text.splitlines():
+        if LANG_HEADER_RE.match(line):
+            continue
+
+        pron_match = JA_PRON_RE.match(line)
+        if pron_match:
+            pending_reading = clean_reading(pron_match.group(1))
+            continue
+
+        noun_match = JA_NOUN_RE.match(line)
+        if noun_match:
+            noun_args = noun_match.group(1) or ""
+            noun_reading = noun_args.split("|", 1)[0].strip()
+            pending_reading = clean_reading(noun_reading) or pending_reading
+            continue
+
+        if JA_KANJI_RE.match(line):
+            header_key = ("kanji", pending_reading)
+            if header_key not in emitted_headers:
+                cleaned_lines.append(format_entry_header(title, "漢字", pending_reading))
+                emitted_headers.add(header_key)
+            pending_reading = ""
+            continue
+
+        pos_match = JA_POS_HEADING_RE.match(line)
+        if pos_match:
+            pos_key = pos_match.group(1).strip().lower()
+            label = POS_LABELS.get(pos_key)
+            if label:
+                header_key = (pos_key, pending_reading)
+                if header_key not in emitted_headers:
+                    cleaned_lines.append(
+                        format_entry_header(title, label, pending_reading)
+                    )
+                    emitted_headers.add(header_key)
+                pending_reading = ""
+                continue
+
+        cleaned_lines.append(line)
+
+    return "\n".join(cleaned_lines)
+
+
+def clean_page_text_completely(text, title=""):
     if not text:
         return ""
 
     text = strip_non_japanese_language_blocks(text)
     text = strip_translation_blocks(text)
+    text = strip_reference_sections(text)
     text = FILE_TAG_RE.sub("", text)
+    text = convert_furigana(text)
+    text = strip_wikilinks(text)
+    text = strip_layout_templates(text)
+    text = normalize_japanese_headers(text, title)
     text = INVALID_XML_CHAR_RE.sub("", text)
     return text.strip()
 
 
 def extract_title_and_text(page_elem):
     title_text = ""
-    text_content = ""
+    raw_text = ""
 
     for child in page_elem:
         child_tag = local_name(child.tag)
@@ -105,10 +231,10 @@ def extract_title_and_text(page_elem):
         elif child_tag == "revision":
             for rev_child in child:
                 if local_name(rev_child.tag) == "text" and rev_child.text:
-                    text_content = clean_page_text_completely(rev_child.text)
+                    raw_text = rev_child.text
                     break
 
-    return title_text, text_content
+    return title_text, clean_page_text_completely(raw_text, title_text)
 
 
 def write_page(f, title_text, text_content, raw_text):
